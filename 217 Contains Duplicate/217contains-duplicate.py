@@ -1,0 +1,11 @@
+class Solution:
+    def containsDuplicate(self, nums):
+        counts = defaultdict(int)
+
+        for num in nums:
+            counts[num] += 1
+
+            if counts[num] >= 2:
+                return True
+
+        return False
