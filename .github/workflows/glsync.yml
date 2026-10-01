@@ -15,6 +15,7 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    environment: LeetCode Account
     timeout-minutes: 60
 
     steps:
@@ -23,7 +24,7 @@ jobs:
           LC_COOKIE: ${{ secrets.LEETCODE_SESSION }}
         run: |
           if [ -z "$LC_COOKIE" ]; then
-            echo "::error::Add the LEETCODE_SESSION repository secret before running this workflow."
+            echo "::error::Add LEETCODE_SESSION to the LeetCode Account environment before running this workflow."
             exit 1
           fi
 
