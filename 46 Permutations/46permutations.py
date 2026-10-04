@@ -1,20 +1,26 @@
 class Solution:
     def permute(self, nums: list[int]) -> list[list[int]]:
-        stack = []
+        if not len(nums):
+            return [[]]
+
+        sliced = nums[1:]
+
+        smaller_permutations = self.permute(sliced)
+
+        curr = nums[0]
         result = []
 
-        for num in nums:
-            stack.append((0, [num]))
-
-        while len(stack):
-            height, subresult = stack.pop()
-
-            if height == len(nums) - 1:
-                result.append(subresult)
-                continue
-
-            for num in nums:
-                if num not in subresult:
-                    stack.append((height + 1, subresult + [num]))
+        for perm in smaller_permutations:
+            for i in range(len(perm) + 1):
+                copy = perm.copy()
+                copy.insert(i, curr)
+                result.append(copy)
 
         return result
+
+
+
+
+
+        
+        
