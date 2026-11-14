@@ -2,8 +2,6 @@ name: Sync LeetCode submissions
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 8 * * 6" # Saturdays at 08:00 UTC
 
 permissions:
   contents: write
@@ -24,7 +22,7 @@ jobs:
           LC_COOKIE: ${{ secrets.LEETCODE_SESSION }}
         run: |
           if [ -z "$LC_COOKIE" ]; then
-            echo "::error::Add LEETCODE_SESSION to the LeetCode Account environment before running this workflow."
+            echo "::error::Run scripts/sync-leetcode.sh locally to set a fresh LEETCODE_SESSION secret and start the sync."
             exit 1
           fi
 
