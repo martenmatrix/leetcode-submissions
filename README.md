@@ -1,4 +1,4 @@
-# LeetCode submissions
+# LeetCode Submissions
 
 Requires macOS, Python 3 and [GitHub CLI](https://cli.github.com) (`gh auth login`).
 

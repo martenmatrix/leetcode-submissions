@@ -3,6 +3,7 @@
 import argparse
 import configparser
 import contextlib
+import errno
 import getpass
 import json
 import os
@@ -19,6 +20,19 @@ import urllib.request
 
 class SessionError(Exception):
     pass
+
+
+def file_access_hint(error):
+    if sys.platform == "darwin" and error.errno == errno.EPERM:
+        terminal = {
+            "iTerm.app": "iTerm", "Apple_Terminal": "Terminal", "vscode": "Visual Studio Code",
+        }.get(os.environ.get("TERM_PROGRAM"), "the terminal app running this command")
+        return (
+            "Check System Settings > Privacy & Security > Full Disk Access and enable "
+            f"{terminal}, then fully quit and reopen it before rerunning this command. "
+            "This grants broad file access; use --manual if you prefer to paste the cookie."
+        )
+    return "Check read permission for this file, or use --manual to paste the cookie."
 
 
 def browser_cli():
@@ -100,7 +114,7 @@ def firefox_cookie_files(cookie_file):
         raise SessionError(
             f"Access to Firefox profile metadata was denied at {denied_path} "
             f"(errno {error.errno}). "
-            "Check access for the app running this command, or use --manual."
+            + file_access_hint(error)
         ) from None
     except configparser.Error:
         raise SessionError(
@@ -119,6 +133,7 @@ def firefox_cookie_files(cookie_file):
 def firefox_sessions(cookie_file):
     candidates = []
     failures = []
+    permission_error = None
     files = firefox_cookie_files(cookie_file)
     for path in files:
         try:
@@ -132,15 +147,17 @@ def firefox_sessions(cookie_file):
                     raise
                 rows = firefox_snapshot_rows(path)
             candidates.extend((value, path) for (value,) in rows if value)
-        except PermissionError:
-            failures.append(f"macOS denied access to {path}")
+        except PermissionError as error:
+            failures.append(f"Access denied at {error.filename or path}")
+            permission_error = error
         except FileNotFoundError:
             failures.append(f"Cookie database does not exist: {path}")
         except (OSError, sqlite3.Error):
             failures.append(f"Could not read the cookie database at {path}; it may be locked")
     if not candidates:
         if failures:
-            raise SessionError("; ".join(failures) + ". No cookie was uploaded. Use --manual if browser access is unavailable.")
+            hint = file_access_hint(permission_error) if permission_error is not None else "Use --manual if browser access is unavailable."
+            raise SessionError("; ".join(failures) + ". No cookie was uploaded. " + hint)
         raise SessionError(
             f"Checked {len(files)} Firefox profile(s), but found no unexpired LEETCODE_SESSION cookie. "
             "Sign in to leetcode.com in a regular (not private) Firefox window, then retry. "
@@ -210,6 +227,8 @@ def browser_session(command, browser, cookie_file):
     if result.returncode == 1 and not result.stderr.strip():
         raise SessionError("No LEETCODE_SESSION cookie was found in this browser profile. Sign in and retry.")
     if result.returncode or not result.stdout.strip():
+        if "PermissionError" in result.stderr or "Operation not permitted" in result.stderr:
+            raise SessionError("Browser profile access was denied. " + file_access_hint(PermissionError(errno.EPERM, "Access denied")))
         raise SessionError(
             "The browser cookie reader could not access this profile. Check browser-data "
             "or Keychain permissions, choose --cookie-file, or use --manual."

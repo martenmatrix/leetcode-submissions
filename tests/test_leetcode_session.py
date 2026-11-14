@@ -114,7 +114,7 @@ class SessionTests(unittest.TestCase):
     def test_cli_access_errors_are_not_reported_as_missing_login(self):
         failure = subprocess.CompletedProcess([], 1, "", "PermissionError: access denied")
         with patch.object(session.subprocess, "run", return_value=failure):
-            with self.assertRaisesRegex(session.SessionError, "could not access this profile"):
+            with self.assertRaisesRegex(session.SessionError, "Browser profile access was denied"):
                 session.browser_session(["browser-cookie"], "chrome", None)
 
     def test_signed_out_and_invalid_responses_are_rejected(self):
@@ -210,11 +210,16 @@ class FirefoxLookupTests(unittest.TestCase):
     def test_permission_error_identifies_the_exact_denied_file(self):
         denied_path = self.root / "profiles.ini"
         error = PermissionError(1, "Operation not permitted", str(denied_path))
-        with patch.object(session.Path, "open", side_effect=error):
+        with patch.object(session.Path, "open", side_effect=error), \
+             patch.object(session.sys, "platform", "darwin"), \
+             patch.dict(session.os.environ, {"TERM_PROGRAM": "iTerm.app"}):
             with self.assertRaises(session.SessionError) as raised:
                 session.firefox_cookie_files(None)
         self.assertIn(str(denied_path), str(raised.exception))
         self.assertIn("errno 1", str(raised.exception))
+        self.assertIn("Privacy & Security > Full Disk Access", str(raised.exception))
+        self.assertIn("enable iTerm", str(raised.exception))
+        self.assertIn("fully quit and reopen", str(raised.exception))
 
     def test_tries_next_saved_session_when_leetcode_rejects_first(self):
         output = io.StringIO()
