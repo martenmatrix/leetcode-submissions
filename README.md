@@ -1,5 +1,7 @@
 # LeetCode Submissions
 
+[My LeetCode profile](https://leetcode.com/u/martenmatrix/)
+
 Requires macOS, Python 3 and [GitHub CLI](https://cli.github.com) (`gh auth login`).
 
 ```sh
