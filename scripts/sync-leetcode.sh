@@ -2,6 +2,18 @@
 set -euo pipefail
 
 repository="martenmatrix/leetcode-submissions"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+if ! command -v python3 >/dev/null 2>&1; then
+  printf 'Install Python 3 to read and verify your LeetCode browser session.\n' >&2
+  exit 1
+fi
+
+for argument in "$@"; do
+  if [[ "$argument" == "--help" || "$argument" == "-h" ]]; then
+    exec python3 "$script_dir/leetcode-session.py" --help
+  fi
+done
 
 if ! command -v gh >/dev/null 2>&1; then
   printf 'Install GitHub CLI (https://cli.github.com), then run gh auth login.\n' >&2
@@ -13,10 +25,9 @@ if [[ ! -t 0 ]]; then
   exit 1
 fi
 
-printf 'Copy the LEETCODE_SESSION cookie from your signed-in LeetCode browser.\n'
-# GitHub CLI prompts with hidden input and encrypts the secret before uploading it.
-# Keeping the token out of workflow inputs also keeps it out of the dispatch payload.
-gh secret set LEETCODE_SESSION --repo "$repository" --env "LeetCode Account"
+# The helper opens LeetCode, captures browser-cookie3's CLI output in memory,
+# verifies the account, and requires its username before updating the secret.
+python3 "$script_dir/leetcode-session.py" "$@" --repo "$repository"
 
 # Only dispatch after the secret update succeeds. The workflow runs from main.
 gh workflow run glsync.yml --repo "$repository" --ref main
