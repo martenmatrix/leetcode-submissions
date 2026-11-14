@@ -32,6 +32,16 @@ def browser_cli():
     return [str(python), "-m", "browser_cookie3"]
 
 
+def choose_browser():
+    while True:
+        browser = input("Open LeetCode in Firefox or Chrome? [firefox]: ").strip().lower()
+        if not browser:
+            return "firefox"
+        if browser in ("firefox", "chrome"):
+            return browser
+        print("Please enter firefox or chrome, or press Enter for Firefox.")
+
+
 def open_browser(browser):
     applications = {"chrome": "Google Chrome", "firefox": "Firefox", "safari": "Safari"}
     application = applications[browser]
@@ -99,7 +109,10 @@ def account_username(session):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--browser", choices=("chrome", "firefox", "safari"), default="chrome")
+    parser.add_argument(
+        "--browser", choices=("firefox", "chrome", "safari"),
+        help="Skip the browser prompt (the prompt defaults to Firefox)",
+    )
     parser.add_argument("--cookie-file", help="Cookie database for a specific browser profile")
     parser.add_argument("--manual", action="store_true", help="Paste a cookie at a hidden prompt instead")
     parser.add_argument("--repo", default="martenmatrix/leetcode-submissions", help=argparse.SUPPRESS)
@@ -110,6 +123,7 @@ def main():
     manual = args.manual
     command = None
     if not manual:
+        args.browser = args.browser or choose_browser()
         open_browser(args.browser)
         command = browser_cli()
 

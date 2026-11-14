@@ -40,26 +40,30 @@ class SessionTests(unittest.TestCase):
         return result, upload, opening, setup, lookup, hidden
 
     def test_matching_username_uploads_token_through_stdin(self):
-        result, upload, *_ = self.run_main(["marten"])
+        result, upload, opening, _, lookup, _ = self.run_main(["", "marten"])
         self.assertEqual(result, 0)
+        opening.assert_called_once_with("firefox")
+        lookup.assert_called_once_with(["browser-cookie"], "firefox", None)
         upload.assert_called_once()
         self.assertEqual(upload.call_args.kwargs["input"], TOKEN)
         self.assertNotIn(TOKEN, upload.call_args.args[0])
         self.assertIn("LeetCode Account", upload.call_args.args[0])
 
     def test_wrong_username_never_updates_secret(self):
-        result, upload, *_ = self.run_main(["someone-else"])
+        result, upload, opening, _, lookup, _ = self.run_main(["chrome", "someone-else"])
         self.assertEqual(result, 1)
+        opening.assert_called_once_with("chrome")
+        lookup.assert_called_once_with(["browser-cookie"], "chrome", None)
         upload.assert_not_called()
 
     def test_missing_session_can_cancel_without_uploading(self):
-        result, upload, *_ = self.run_main(["cancel"], cookie_result=[session.SessionError("Signed out")])
+        result, upload, *_ = self.run_main(["", "cancel"], cookie_result=[session.SessionError("Signed out")])
         self.assertEqual(result, 1)
         upload.assert_not_called()
 
     def test_retry_rereads_cookie_after_browser_login(self):
         result, upload, _, _, lookup, _ = self.run_main(
-            ["", "marten"], cookie_result=[session.SessionError("Signed out"), TOKEN],
+            ["firefox", "", "marten"], cookie_result=[session.SessionError("Signed out"), TOKEN],
         )
         self.assertEqual(result, 0)
         self.assertEqual(lookup.call_count, 2)

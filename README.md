@@ -13,7 +13,8 @@ once with `gh auth login`. Your GitHub account needs permission to update the
 bash scripts/sync-leetcode.sh
 ```
 
-The command opens LeetCode in **Google Chrome**, reads `LEETCODE_SESSION` using
+The command asks whether to open **Firefox or Chrome**. Press Enter to use
+**Firefox**, the default. It then opens LeetCode, reads `LEETCODE_SESSION` using
 [browser-cookie3's existing CLI](https://github.com/borisbabic/browser_cookie3#command-line-usage),
 and asks LeetCode which account is signed in. Type the displayed **LeetCode
 username** to confirm. Only then does it update the existing environment secret
@@ -25,10 +26,11 @@ browser's cookies or its Keychain encryption key. The cookie is captured in
 memory and sent to GitHub through standard input; it is not printed, written to
 a local token file, or passed as a workflow input.
 
-Choose another browser if needed:
+To skip the browser prompt, choose one explicitly:
 
 ```sh
 bash scripts/sync-leetcode.sh --browser firefox
+bash scripts/sync-leetcode.sh --browser chrome
 bash scripts/sync-leetcode.sh --browser safari
 ```
 
