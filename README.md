@@ -26,6 +26,11 @@ in Firefox's write-ahead log. Expired sessions are skipped, and saved sessions
 are verified with LeetCode until a signed-in account is found. Firefox lookup
 uses Python's standard library and does not install a package.
 
+If Firefox holds an exclusive database lock, the helper reads a temporary
+snapshot of the database and its write-ahead log. The temporary directory is
+private, copied files have owner-only permissions, and the snapshot is removed
+after the read. The browser's own files are not modified.
+
 For Chrome or Safari, the command reuses
 [browser-cookie3's CLI](https://github.com/borisbabic/browser_cookie3#command-line-usage).
 On the first run with either browser, it installs the pinned package into an
@@ -56,6 +61,14 @@ An error naming denied access to profile files indicates a macOS browser-data
 permission problem. Run from a terminal permitted to read Firefox data, or use
 the manual mode below. Restart the command after updating these scripts;
 pressing Enter in an already running copy does not load the updated code.
+
+If access still fails, run this check from the same terminal and inspect the
+exact denied filename and Python interpreter. It does not open a browser,
+display or upload a token, or start a sync:
+
+```sh
+bash scripts/sync-leetcode.sh --diagnose
+```
 
 If browser access is unavailable, use the hidden manual prompt, which also
 verifies the account and requires its username before proceeding:

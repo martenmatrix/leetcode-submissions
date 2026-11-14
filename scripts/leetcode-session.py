@@ -5,10 +5,13 @@ import configparser
 import contextlib
 import getpass
 import json
+import os
 from pathlib import Path
+import shutil
 import subprocess
 import sqlite3
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -92,11 +95,12 @@ def firefox_cookie_files(cookie_file):
             except (FileNotFoundError, NotADirectoryError):
                 continue
             files.append((modified, candidate))
-    except PermissionError:
+    except PermissionError as error:
+        denied_path = error.filename or root
         raise SessionError(
-            f"macOS denied access to Firefox profile files under {root}. "
-            "This is a browser-data permission problem, not a missing login. "
-            "Run from a terminal permitted to read Firefox data, or use --manual."
+            f"Access to Firefox profile metadata was denied at {denied_path} "
+            f"(errno {error.errno}). "
+            "Check access for the app running this command, or use --manual."
         ) from None
     except configparser.Error:
         raise SessionError(
@@ -121,16 +125,12 @@ def firefox_sessions(cookie_file):
             # An explicit open preserves macOS permission errors that SQLite obscures.
             with path.open("rb"):
                 pass
-            # Read the live database and its WAL; copying only cookies.sqlite can
-            # omit a login that Firefox has not checkpointed into the main file.
-            with contextlib.closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=3)) as connection:
-                rows = connection.execute(
-                    "SELECT value FROM moz_cookies "
-                    "WHERE name = ? AND host IN (?, ?, ?, ?) "
-                    "AND (expiry = 0 OR expiry > ?) ORDER BY expiry DESC",
-                    ("LEETCODE_SESSION", "leetcode.com", ".leetcode.com",
-                     "www.leetcode.com", ".www.leetcode.com", int(time.time())),
-                ).fetchall()
+            try:
+                rows = firefox_cookie_rows(path)
+            except sqlite3.OperationalError as error:
+                if (getattr(error, "sqlite_errorcode", 0) & 255) not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                    raise
+                rows = firefox_snapshot_rows(path)
             candidates.extend((value, path) for (value,) in rows if value)
         except PermissionError:
             failures.append(f"macOS denied access to {path}")
@@ -151,6 +151,51 @@ def firefox_sessions(cookie_file):
     for value, path in candidates:
         unique.setdefault(value, path)
     return list(unique.items())
+
+
+def firefox_cookie_rows(path):
+    with contextlib.closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=0.25)) as connection:
+        return connection.execute(
+            "SELECT value FROM moz_cookies "
+            "WHERE name = ? AND host IN (?, ?, ?, ?) "
+            "AND (expiry = 0 OR expiry > ?) ORDER BY expiry DESC",
+            ("LEETCODE_SESSION", "leetcode.com", ".leetcode.com",
+             "www.leetcode.com", ".www.leetcode.com", int(time.time())),
+        ).fetchall()
+
+
+def firefox_snapshot_rows(path):
+    def state(source):
+        try:
+            metadata = source.stat()
+            return metadata.st_ino, metadata.st_size, metadata.st_mtime_ns
+        except FileNotFoundError:
+            return None
+
+    # Firefox can hold an exclusive SQLite lock. Copy both the database and WAL
+    # into a private directory; omitting the WAL can lose the current login.
+    # Compare source metadata before/after copying and retry if either changed.
+    sources = [path, Path(str(path) + "-wal")]
+    for _ in range(3):
+        with tempfile.TemporaryDirectory(prefix="leetcode-firefox-") as directory:
+            before = [state(source) for source in sources]
+            snapshot = Path(directory) / "cookies.sqlite"
+            try:
+                for source, metadata, suffix in zip(sources, before, ("", "-wal")):
+                    if metadata is None:
+                        continue
+                    target = Path(str(snapshot) + suffix)
+                    descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                    with os.fdopen(descriptor, "wb") as output, source.open("rb") as input_file:
+                        shutil.copyfileobj(input_file, output)
+            except FileNotFoundError:
+                continue
+            if before != [state(source) for source in sources]:
+                continue
+            return firefox_cookie_rows(snapshot)
+    raise SessionError(
+        "Firefox kept changing its cookie database during the read. Wait a moment and retry."
+    )
 
 
 def browser_session(command, browser, cookie_file):
@@ -232,8 +277,23 @@ def main():
     )
     parser.add_argument("--cookie-file", help="Cookie database for a specific browser profile")
     parser.add_argument("--manual", action="store_true", help="Paste a cookie at a hidden prompt instead")
+    parser.add_argument(
+        "--diagnose", action="store_true",
+        help="Check Firefox profile access without uploading a token or starting a sync",
+    )
     parser.add_argument("--repo", default="martenmatrix/leetcode-submissions", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.diagnose:
+        print(f"Terminal: {os.environ.get('TERM_PROGRAM', 'unknown')}")
+        print(f"Python: {sys.executable}")
+        try:
+            sessions = firefox_sessions(args.cookie_file)
+        except SessionError as error:
+            print(str(error), file=sys.stderr)
+            return 1
+        print(f"Firefox file access OK. Saved LeetCode sessions found: {len(sessions)}")
+        print("No token was displayed or uploaded; no sync was started.")
+        return 0
     if not sys.stdin.isatty():
         parser.error("Run this command in a terminal to confirm the account.")
 

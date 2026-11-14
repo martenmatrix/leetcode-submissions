@@ -83,6 +83,17 @@ class SessionTests(unittest.TestCase):
         hidden.assert_called_once()
         upload.assert_called_once()
 
+    def test_diagnostics_never_upload_or_show_cookie_values(self):
+        output = io.StringIO()
+        with patch.object(sys, "argv", ["leetcode-session.py", "--diagnose"]), \
+             patch.object(session, "firefox_sessions", return_value=[(TOKEN, Path("/profile/cookies.sqlite"))]), \
+             patch.object(session.subprocess, "run") as command, \
+             contextlib.redirect_stdout(output):
+            self.assertEqual(session.main(), 0)
+        command.assert_not_called()
+        self.assertNotIn(TOKEN, output.getvalue())
+        self.assertIn("Saved LeetCode sessions found: 1", output.getvalue())
+
     def test_extraction_uses_existing_cli_and_requested_profile(self):
         with patch.object(session.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, TOKEN + "\n")) as run:
             self.assertEqual(session.browser_session(["browser-cookie"], "chrome", "/profile/Cookies"), TOKEN)
@@ -165,6 +176,29 @@ class FirefoxLookupTests(unittest.TestCase):
         self.assertGreater(Path(str(self.developer) + "-wal").stat().st_size, 0)
         self.assertEqual(session.firefox_sessions(str(self.developer)), [(TOKEN, self.developer)])
 
+    def test_locked_live_database_uses_private_snapshot_with_wal_and_cleans_up(self):
+        connection = self.database(self.developer, wal=True)
+        connection.execute("PRAGMA locking_mode=EXCLUSIVE")
+        connection.execute("INSERT INTO moz_cookies VALUES (?, ?, ?, ?)", (
+            ".leetcode.com", "LEETCODE_SESSION", TOKEN, int(time.time()) + 1000,
+        ))
+        connection.commit()
+        snapshots = []
+        read_rows = session.firefox_cookie_rows
+
+        def inspect_read(path):
+            if path != self.developer:
+                snapshots.append(path)
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(path.parent.stat().st_mode & 0o777, 0o700)
+                self.assertTrue(Path(str(path) + "-wal").exists())
+            return read_rows(path)
+
+        with patch.object(session, "firefox_cookie_rows", side_effect=inspect_read):
+            self.assertEqual(session.firefox_sessions(str(self.developer)), [(TOKEN, self.developer)])
+        self.assertEqual(len(snapshots), 1)
+        self.assertFalse(snapshots[0].parent.exists())
+
     def test_checks_profile_registered_outside_standard_profile_directory(self):
         custom = self.home / "custom-profile" / "cookies.sqlite"
         custom.parent.mkdir()
@@ -173,10 +207,14 @@ class FirefoxLookupTests(unittest.TestCase):
             config.write(f"[Profile2]\nIsRelative=0\nPath={custom.parent}\n")
         self.assertIn(custom, session.firefox_cookie_files(None))
 
-    def test_permission_error_is_reported_as_access_problem(self):
-        with patch.object(session.Path, "open", side_effect=PermissionError):
-            with self.assertRaisesRegex(session.SessionError, "permission problem, not a missing login"):
+    def test_permission_error_identifies_the_exact_denied_file(self):
+        denied_path = self.root / "profiles.ini"
+        error = PermissionError(1, "Operation not permitted", str(denied_path))
+        with patch.object(session.Path, "open", side_effect=error):
+            with self.assertRaises(session.SessionError) as raised:
                 session.firefox_cookie_files(None)
+        self.assertIn(str(denied_path), str(raised.exception))
+        self.assertIn("errno 1", str(raised.exception))
 
     def test_tries_next_saved_session_when_leetcode_rejects_first(self):
         output = io.StringIO()

@@ -10,6 +10,9 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 for argument in "$@"; do
+  if [[ "$argument" == "--diagnose" ]]; then
+    exec python3 "$script_dir/leetcode-session.py" "$@"
+  fi
   if [[ "$argument" == "--help" || "$argument" == "-h" ]]; then
     exec python3 "$script_dir/leetcode-session.py" --help
   fi
