@@ -1,11 +1,15 @@
 """Confirm a browser's LeetCode account before updating its GitHub secret."""
 
 import argparse
+import configparser
+import contextlib
 import getpass
 import json
 from pathlib import Path
 import subprocess
+import sqlite3
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -57,6 +61,98 @@ def open_browser(browser):
         raise SessionError(f"Could not open {application}. Choose another --browser or use --manual.")
 
 
+def firefox_cookie_files(cookie_file):
+    if cookie_file:
+        return [Path(cookie_file).expanduser().absolute()]
+
+    root = Path.home() / "Library" / "Application Support" / "Firefox"
+    profiles = configparser.ConfigParser(interpolation=None)
+    candidates = []
+    try:
+        try:
+            with (root / "profiles.ini").open(encoding="utf-8") as stream:
+                profiles.read_file(stream)
+        except FileNotFoundError:
+            pass
+        for section in profiles.sections():
+            if section.startswith("Profile") and profiles[section].get("Path"):
+                profile = Path(profiles[section]["Path"]).expanduser()
+                if profiles[section].get("IsRelative", "1") == "1":
+                    profile = root / profile
+                candidates.append(profile / "cookies.sqlite")
+        # Include Developer Edition and profiles not selected by the first Install entry.
+        try:
+            candidates.extend(profile / "cookies.sqlite" for profile in (root / "Profiles").iterdir())
+        except FileNotFoundError:
+            pass
+        files = []
+        for candidate in dict.fromkeys(candidates):
+            try:
+                modified = candidate.stat().st_mtime
+            except (FileNotFoundError, NotADirectoryError):
+                continue
+            files.append((modified, candidate))
+    except PermissionError:
+        raise SessionError(
+            f"macOS denied access to Firefox profile files under {root}. "
+            "This is a browser-data permission problem, not a missing login. "
+            "Run from a terminal permitted to read Firefox data, or use --manual."
+        ) from None
+    except configparser.Error:
+        raise SessionError(
+            "Could not parse Firefox's profiles.ini. Use --cookie-file with the "
+            "cookies.sqlite file in the Profile Folder shown by Firefox's about:support page."
+        ) from None
+    if not files:
+        raise SessionError(
+            f"No Firefox cookie databases were found under {root}. "
+            "Open about:support in the Firefox window you use, find Profile Folder, "
+            "and pass its cookies.sqlite path with --cookie-file."
+        )
+    return [path for _, path in sorted(files, key=lambda item: item[0], reverse=True)]
+
+
+def firefox_sessions(cookie_file):
+    candidates = []
+    failures = []
+    files = firefox_cookie_files(cookie_file)
+    for path in files:
+        try:
+            # An explicit open preserves macOS permission errors that SQLite obscures.
+            with path.open("rb"):
+                pass
+            # Read the live database and its WAL; copying only cookies.sqlite can
+            # omit a login that Firefox has not checkpointed into the main file.
+            with contextlib.closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=3)) as connection:
+                rows = connection.execute(
+                    "SELECT value FROM moz_cookies "
+                    "WHERE name = ? AND host IN (?, ?, ?, ?) "
+                    "AND (expiry = 0 OR expiry > ?) ORDER BY expiry DESC",
+                    ("LEETCODE_SESSION", "leetcode.com", ".leetcode.com",
+                     "www.leetcode.com", ".www.leetcode.com", int(time.time())),
+                ).fetchall()
+            candidates.extend((value, path) for (value,) in rows if value)
+        except PermissionError:
+            failures.append(f"macOS denied access to {path}")
+        except FileNotFoundError:
+            failures.append(f"Cookie database does not exist: {path}")
+        except (OSError, sqlite3.Error):
+            failures.append(f"Could not read the cookie database at {path}; it may be locked")
+    if not candidates:
+        if failures:
+            raise SessionError("; ".join(failures) + ". No cookie was uploaded. Use --manual if browser access is unavailable.")
+        raise SessionError(
+            f"Checked {len(files)} Firefox profile(s), but found no unexpired LEETCODE_SESSION cookie. "
+            "Sign in to leetcode.com in a regular (not private) Firefox window, then retry. "
+            "For a different profile location, use --cookie-file with its cookies.sqlite path."
+        )
+    # The same account can appear in several profiles or Firefox containers.
+    unique = {}
+    for value, path in candidates:
+        unique.setdefault(value, path)
+    return list(unique.items())
+
+
 def browser_session(command, browser, cookie_file):
     arguments = [*command, f"--{browser}"]
     if cookie_file:
@@ -66,10 +162,12 @@ def browser_session(command, browser, cookie_file):
         result = subprocess.run(arguments, capture_output=True, text=True, timeout=60)
     except subprocess.TimeoutExpired:
         raise SessionError("Browser cookie access timed out. Check for a macOS permission prompt.") from None
+    if result.returncode == 1 and not result.stderr.strip():
+        raise SessionError("No LEETCODE_SESSION cookie was found in this browser profile. Sign in and retry.")
     if result.returncode or not result.stdout.strip():
         raise SessionError(
-            "Could not read a LeetCode session from this browser profile. "
-            "Sign in first; you may need to quit the browser to save its latest cookies."
+            "The browser cookie reader could not access this profile. Check browser-data "
+            "or Keychain permissions, choose --cookie-file, or use --manual."
         )
     return result.stdout.strip()
 
@@ -107,6 +205,25 @@ def account_username(session):
     return username
 
 
+def browser_account(command, browser, cookie_file):
+    if browser != "firefox":
+        session = browser_session(command, browser, cookie_file)
+        return session, account_username(session)
+
+    candidates = firefox_sessions(cookie_file)
+    for session, path in candidates:
+        try:
+            username = account_username(session)
+        except SessionError:
+            continue
+        print(f"Found the signed-in session in Firefox profile: {path.parent.name}")
+        return session, username
+    raise SessionError(
+        f"Found {len(candidates)} saved Firefox session(s), but LeetCode could not verify any of them. "
+        "Refresh LeetCode and sign in again if needed, then retry."
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -125,20 +242,21 @@ def main():
     if not manual:
         args.browser = args.browser or choose_browser()
         open_browser(args.browser)
-        command = browser_cli()
+        if args.browser != "firefox":
+            command = browser_cli()
 
     while True:
         try:
             if manual:
                 session = getpass.getpass("LEETCODE_SESSION (hidden): ")
+                username = account_username(session)
             else:
-                session = browser_session(command, args.browser, args.cookie_file)
-            username = account_username(session)
+                session, username = browser_account(command, args.browser, args.cookie_file)
             break
         except SessionError as error:
             print(str(error), file=sys.stderr)
             answer = input(
-                "Sign in, then press Enter to retry; type 'manual' to paste a cookie "
+                "Resolve the issue, then press Enter to retry; type 'manual' to paste a cookie "
                 "or 'cancel' to stop: "
             ).strip().lower()
             if answer == "cancel":
